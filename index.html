@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Real-Time Object Detection Dashboard using ESP32 Camera, YOLOv3, and Firebase">
+    <title>Real-Time Object Detection Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header Section -->
+        <header class="header">
+            <div class="header-glow"></div>
+            <h1 class="title">
+                <span class="title-icon">◉</span>
+                Real-Time Object Detection Dashboard
+            </h1>
+            <p class="subtitle">ESP32 Camera + YOLOv3 + Firebase</p>
+            <div class="header-line"></div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Live Image Section -->
+            <section class="live-image-section">
+                <div class="section-header">
+                    <span class="section-icon">📡</span>
+                    <h2>Live Detection Feed</h2>
+                    <span class="live-indicator">
+                        <span class="live-dot"></span>
+                        LIVE
+                    </span>
+                </div>
+                <div class="image-container">
+                    <div class="image-frame">
+                        <img id="detection-image" src="" alt="Detection Feed" class="detection-image">
+                        <div class="image-overlay"></div>
+                        <div class="corner corner-tl"></div>
+                        <div class="corner corner-tr"></div>
+                        <div class="corner corner-bl"></div>
+                        <div class="corner corner-br"></div>
+                    </div>
+                    <div class="image-scanline"></div>
+                </div>
+            </section>
+
+            <!-- Detection Panel -->
+            <section class="detection-panel">
+                <div class="section-header">
+                    <span class="section-icon">🎯</span>
+                    <h2>Detected Objects</h2>
+                </div>
+
+                <!-- Detection Status -->
+                <div class="status-container">
+                    <div id="detection-status" class="status status-waiting">
+                        <span class="status-icon">⏳</span>
+                        <span class="status-text">Waiting for data...</span>
+                    </div>
+                </div>
+
+                <!-- Objects List -->
+                <div id="objects-container" class="objects-container">
+                    <!-- Object cards will be inserted here dynamically -->
+                </div>
+
+                <!-- Timestamp -->
+                <div class="timestamp-container">
+                    <div class="timestamp-icon">🕐</div>
+                    <div class="timestamp-text">
+                        Last updated: <span id="timestamp">--:--:--</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-line"></div>
+            <p>AI Vision System • Smart Surveillance Technology</p>
+        </footer>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+
+    <script>
+        // Firebase Configuration - Replace with your own config
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            databaseURL: "https://yolo-3b89a-default-rtdb.asia-southeast1.firebasedatabase.app/",
+            projectId: "yolo-3b89a",
+            storageBucket: "YOUR_PROJECT.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        // DOM Elements
+        const detectionImage = document.getElementById('detection-image');
+        const objectsContainer = document.getElementById('objects-container');
+        const detectionStatus = document.getElementById('detection-status');
+        const timestampElement = document.getElementById('timestamp');
+
+        // Function to format timestamp
+        function formatTimestamp(unixTimestamp) {
+            const date = new Date(unixTimestamp * 1000);
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            return `${hours}:${minutes}:${seconds}`;
+        }
+
+        // Function to get confidence color class
+        function getConfidenceClass(confidence) {
+            if (confidence >= 80) return 'confidence-high';
+            if (confidence >= 50) return 'confidence-medium';
+            return 'confidence-low';
+        }
+
+        // Function to create object card HTML
+        function createObjectCard(obj, index) {
+            const confidenceClass = getConfidenceClass(obj.confidence);
+            return `
+                <div class="object-card" style="animation-delay: ${index * 0.1}s">
+                    <div class="object-icon">🔍</div>
+                    <div class="object-info">
+                        <div class="object-label">${obj.label}</div>
+                        <div class="confidence-bar-container">
+                            <div class="confidence-bar ${confidenceClass}" style="width: ${obj.confidence}%"></div>
+                        </div>
+                        <div class="object-confidence ${confidenceClass}">${obj.confidence}% confidence</div>
+                    </div>
+                    <div class="object-badge ${confidenceClass}">${obj.confidence}%</div>
+                </div>
+            `;
+        }
+
+        // Function to update detection status
+        function updateStatus(hasObjects) {
+            if (hasObjects) {
+                detectionStatus.className = 'status status-success';
+                detectionStatus.innerHTML = `
+                    <span class="status-icon">✅</span>
+                    <span class="status-text">Object detected successfully</span>
+                `;
+            } else {
+                detectionStatus.className = 'status status-empty';
+                detectionStatus.innerHTML = `
+                    <span class="status-icon">⚠️</span>
+                    <span class="status-text">No object detected</span>
+                `;
+            }
+        }
+
+        // Listen for realtime updates from Firebase
+        const detectionRef = database.ref('/detection');
+
+        detectionRef.on('value', (snapshot) => {
+            const data = snapshot.val();
+
+            if (data) {
+                // Update image
+                if (data.image_url) {
+                    detectionImage.src = data.image_url;
+                    detectionImage.alt = 'Latest Detection';
+                }
+
+                // Update objects list
+                if (data.objects && data.objects.length > 0) {
+                    const objectsHTML = data.objects.map((obj, index) =>
+                        createObjectCard(obj, index)
+                    ).join('');
+                    objectsContainer.innerHTML = objectsHTML;
+                    updateStatus(true);
+                } else {
+                    objectsContainer.innerHTML = `
+                        <div class="no-objects">
+                            <div class="no-objects-icon">📭</div>
+                            <p>No objects detected in current frame</p>
+                        </div>
+                    `;
+                    updateStatus(false);
+                }
+
+                // Update timestamp
+                if (data.timestamp) {
+                    timestampElement.textContent = formatTimestamp(data.timestamp);
+                }
+            } else {
+                // No data available
+                detectionStatus.className = 'status status-waiting';
+                detectionStatus.innerHTML = `
+                    <span class="status-icon">⏳</span>
+                    <span class="status-text">Waiting for detection data...</span>
+                `;
+                objectsContainer.innerHTML = `
+                    <div class="no-objects">
+                        <div class="no-objects-icon">📡</div>
+                        <p>Connecting to detection system...</p>
+                    </div>
+                `;
+            }
+        }, (error) => {
+            console.error('Firebase connection error:', error);
+            detectionStatus.className = 'status status-error';
+            detectionStatus.innerHTML = `
+                <span class="status-icon">❌</span>
+                <span class="status-text">Connection error</span>
+            `;
+        });
+    </script>
+</body>
+
+</html>
